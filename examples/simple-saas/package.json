@@ -1,0 +1,14 @@
+{
+  "name": "@tensaco/type-server-examples-simple-saas",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@tensaco/type-server": "../.."
+  }
+}
