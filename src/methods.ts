@@ -1,42 +1,52 @@
-export type StaticMethodProps = {
+import type { Model } from "@tensaco/type-server/model";
+import {
+  isInstanceMethod,
+  isStaticMethod,
+} from "@tensaco/type-server/utils/typescript";
+import { BodyProp, Query, Path } from "tsoa";
+import { Arg, type ClassType } from "type-graphql";
+
+export type ActionProps = {
   name?: string;
   path?: string;
   method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "HEAD";
+  keys?: string[]; // Only used for instance methods
 };
 
-export const STATIC_METHOD_DECORATOR_KEY =
-  "custom:tensaco-type-server-staticMethod";
-export function StaticMethod(props: StaticMethodProps): MethodDecorator {
+export const ACTION_DECORATOR_KEY = "custom:tensaco-type-server-action";
+
+export function Action(props: ActionProps): MethodDecorator {
   return function <T>(
     target: Object,
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<T>
-  ): TypedPropertyDescriptor<T> {
+  ): TypedPropertyDescriptor<T> | void {
     if (typeof propertyKey !== "string") {
       propertyKey = String(propertyKey);
     }
 
-    try {
-      target = target as ClassType<Model>;
-    } catch (error) {
-      throw new Error("Target must be an instance of ClassType<Model>");
+    const isStatic = isStaticMethod(target as ClassType<Model>, propertyKey);
+    const isInstance = isInstanceMethod(target, propertyKey);
+
+    if (!isStatic && !isInstance) {
+      throw new Error(
+        "The decorated method must be either static or instance method"
+      );
     }
 
     const snakeCaseName = propertyKey
       .replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`)
       .replace(/^_/, "");
-    const propsWithDefaults = {
-      name: snakeCaseName,
-      path: "/" + snakeCaseName,
-      ...props,
+
+    const propsWithDefaults: ActionProps = {
+      name: props.name || snakeCaseName,
+      path: props.path || "/" + snakeCaseName,
+      method: props.method,
+      keys: props.keys || [],
     };
 
-    // Additional check to ensure the method is static
-    if (!isStaticMethod(target as ClassType<Model>, propertyKey)) {
-      throw new Error("The decorated method is not static");
-    }
     Reflect.defineMetadata(
-      STATIC_METHOD_DECORATOR_KEY,
+      ACTION_DECORATOR_KEY,
       propsWithDefaults,
       target,
       propertyKey
@@ -46,40 +56,47 @@ export function StaticMethod(props: StaticMethodProps): MethodDecorator {
   };
 }
 
-export type InstanceMethodProps = {
-  keys: string[];
+export type ParamOptions = {
+  restFormat?: "body" | "query" | "path";
   name: string;
-  method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "HEAD";
-  path: string;
+  required?: boolean;
+  type: any;
 };
-export const INSTANCE_METHOD_DECORATOR_KEY =
-  "custom:tensaco-type-server-instanceMethod";
-export function InstanceMethod<T extends Model>(props: InstanceMethodProps) {
-  return function (
-    target: T,
-    propertyKey: string,
-    descriptor: TypedPropertyDescriptor<T>
-  ): TypedPropertyDescriptor<T> | void {
-    if (!isInstanceMethod(target, propertyKey)) {
-      throw new Error("The decorated method is not an instance method");
+
+export function Param(options: ParamOptions): ParameterDecorator {
+  return (
+    target: Object,
+    propertyKey: string | symbol | undefined, // Allow undefined
+    parameterIndex: number
+  ) => {
+    const { restFormat = "body", name, required = true, type } = options;
+
+    if (!propertyKey) {
+      throw new Error(
+        "Property key is required. How did you even get this far? This is a bug."
+      );
     }
-    Reflect.defineMetadata(
-      INSTANCE_METHOD_DECORATOR_KEY,
-      props,
+
+    // Apply tsoa decorator
+    switch (restFormat) {
+      case "body":
+        BodyProp()(target, propertyKey, parameterIndex);
+        break;
+      case "query":
+        Query()(target, propertyKey, parameterIndex);
+        break;
+      case "path":
+        Path()(target, propertyKey, parameterIndex);
+        break;
+      default:
+        throw new Error(`Invalid restFormat: ${restFormat}`);
+    }
+
+    // Apply type-graphql decorator
+    Arg(name, () => type, { nullable: !required })(
       target,
-      propertyKey
+      propertyKey,
+      parameterIndex
     );
   };
-}
-
-class Example {
-  @StaticMethod({ method: "GET" })
-  static getExample() {
-    return "example";
-  }
-
-  @InstanceMethod({ method: "GET", path: "/example" })
-  getExample() {
-    return "example";
-  }
 }

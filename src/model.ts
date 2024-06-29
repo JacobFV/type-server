@@ -1,4 +1,5 @@
 import { typeGQL, typeORM } from "@tensaco/type-server/deps";
+import { Action } from "@tensaco/type-server/methods";
 import { Param } from "tsoa";
 import type {
   BaseEntity,
