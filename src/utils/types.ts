@@ -28,7 +28,10 @@ export type Constructor<
   T extends object,
   Args extends unknown[] = any[]
 > = new (...args: Args) => T;
-export type AbstractClassType<T> = Function & { prototype: T };
+export type AbstractClassType<T> = Function & {
+  [key in keyof T]?: T[key];
+  // prototype: T;
+};
 export type ClassType<
   T extends object = object,
   Args extends unknown[] = any[]
