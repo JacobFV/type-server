@@ -1,0 +1,3 @@
+[submodule "ext/tsoa"]
+	path = ext/tsoa
+	url = https://github.com/lukeautry/tsoa.git
