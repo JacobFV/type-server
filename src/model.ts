@@ -1,8 +1,22 @@
 import { typeGQL, typeORM } from "@tensaco/type-server/deps";
-import { Action } from "@tensaco/type-server/methods";
-import { Param } from "tsoa";
+import {
+  Action,
+  ACTION_PARAM_DECORATOR_KEY,
+  Param,
+  type ActionProps,
+} from "@tensaco/type-server/methods";
+import {
+  HTTPError,
+  NOT_FOUND_ERROR_CODE,
+  NotFoundError,
+  type StaticMethod,
+} from "@tensaco/type-server/utils/types";
+import {
+  isInstanceMethod,
+  isStaticMethod,
+} from "@tensaco/type-server/utils/typescript";
+import { Get, Path, BodyProp } from "tsoa";
 import type {
-  BaseEntity,
   DeepPartial,
   DeleteResult,
   FindManyOptions,
@@ -14,11 +28,14 @@ import type {
   SaveOptions,
   UpdateResult,
 } from "typeorm";
+import * as tsoa from "tsoa";
+import { BaseEntity } from "typeorm/browser";
 import type { PickKeysByType } from "typeorm/common/PickKeysByType.js";
+import { Column } from "typeorm/decorator/columns/Column.js";
 import type { QueryDeepPartialEntity } from "typeorm/query-builder/QueryPartialEntity.js";
 import type { UpsertOptions } from "typeorm/repository/UpsertOptions.js";
 
-export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
+export class Model extends BaseEntity {
   @typeGQL.Field()
   @typeORM.PrimaryGeneratedColumn("uuid")
   id!: number;
@@ -26,40 +43,44 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "POST" })
   static create<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) entityLike: DeepPartial<T>
+    @Param({ name: "entity", restFormat: "body" })
+    entity: DeepPartial<T>
   ): T {
-    return super.create(entityLike);
+    return super.create(entity) as T;
   }
 
   @Action({ restVerb: "POST" })
   static createMultiple<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) entityLikeArray: DeepPartial<T>[]
+    @Param({ name: "entities", restFormat: "body" })
+    entities: DeepPartial<T>[]
   ): T[] {
-    return super.create(entityLikeArray);
+    return super.create(entities) as T[];
   }
 
   @Action({ restVerb: "POST" })
   static async merge<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" })
+    @Param({ name: "mergeIntoEntityId", restFormat: "path" })
     mergeIntoEntityId: string | number | Date | ObjectId,
-    @Param({ restFormat: "body" }) entityLikes: DeepPartial<T>[]
+    @Param({ name: "entityLikes", restFormat: "body" })
+    entityLikes: DeepPartial<T>[]
   ): Promise<T> {
     const entity = await this.findOneById(mergeIntoEntityId);
     if (!entity) {
-      throw new NotFoundError("Entity not found");
+      throw new NotFoundError();
     }
-    return super.merge(entity, ...entityLikes);
+    return super.merge(entity, ...entityLikes) as T;
   }
 
   @Action({ restVerb: "GET" })
   static async preload<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) entityLike: DeepPartial<T>
+    @Param({ name: "entityLike", restFormat: "body" })
+    entityLike: DeepPartial<T>
   ): Promise<T | undefined> {
     try {
-      return await super.preload(entityLike);
+      return (await super.preload(entityLike)) as T | undefined;
     } catch (error) {
       throw new NotFoundError("Entity not found");
     }
@@ -68,40 +89,42 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "POST" })
   static save<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) entity: DeepPartial<T>,
-    @Param({ restFormat: "body" }) options?: SaveOptions
+    @Param({ name: "entity", restFormat: "body" }) entity: DeepPartial<T>,
+    @Param({ name: "options", restFormat: "body" }) options?: SaveOptions
   ): Promise<T> {
-    return super.save(entity, options);
+    return super.save(entity, options) as Promise<T>;
   }
 
   @Action({ restVerb: "POST" })
   static saveMultiple<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) entities: DeepPartial<T>[],
-    @Param({ restFormat: "body" }) options?: SaveOptions
+    @Param({ name: "entities", restFormat: "body" })
+    entities: DeepPartial<T>[],
+    @Param({ name: "options", restFormat: "body" }) options?: SaveOptions
   ): Promise<T[]> {
-    return super.save(entities, options);
+    return super.save(entities, options) as Promise<T[]>;
   }
 
   @Action({ restVerb: "DELETE" })
   static async remove<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) entityId: string | number | Date | ObjectId,
-    @Param({ restFormat: "body" }) options?: RemoveOptions
+    @Param({ name: "entityId", restFormat: "path" })
+    entityId: string | number | Date | ObjectId,
+    @Param({ name: "options", restFormat: "body" }) options?: RemoveOptions
   ): Promise<T> {
     const entity = await this.findOneById(entityId);
     if (!entity) {
       throw new NotFoundError("Entity not found");
     }
-    return super.remove(entity, options);
+    return super.remove(entity, options) as Promise<T>;
   }
 
   @Action({ restVerb: "DELETE" })
   static async removeMultiple<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" })
+    @Param({ name: "entityIds", restFormat: "body" })
     entityIds: (string | number | Date | ObjectId)[],
-    @Param({ restFormat: "body" }) options?: RemoveOptions
+    @Param({ name: "options", restFormat: "body" }) options?: RemoveOptions
   ): Promise<T[]> {
     const entities: T[] = [];
     for (const id of entityIds) {
@@ -109,30 +132,31 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
       if (!entity) {
         throw new NotFoundError(`Entity with id ${id} not found`);
       }
-      entities.push(entity);
+      entities.push(entity as T);
     }
-    return super.remove(entities, options);
+    return super.remove(entities, options) as Promise<T[]>;
   }
 
   @Action({ restVerb: "PATCH" })
   static async softRemove<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) entityId: string | number | Date | ObjectId,
-    @Param({ restFormat: "body" }) options?: SaveOptions
+    @Param({ name: "entityId", restFormat: "path" })
+    entityId: string | number | Date | ObjectId,
+    @Param({ name: "options", restFormat: "body" }) options?: SaveOptions
   ): Promise<T> {
     const entity = await this.findOneById(entityId);
     if (!entity) {
       throw new NotFoundError("Entity not found");
     }
-    return super.softRemove(entity, options);
+    return super.softRemove(entity, options) as Promise<T>;
   }
 
   @Action({ restVerb: "PATCH" })
   static async softRemoveMultiple<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" })
+    @Param({ name: "entityIds", restFormat: "body" })
     entityIds: (string | number | Date | ObjectId)[],
-    @Param({ restFormat: "body" }) options?: SaveOptions
+    @Param({ name: "options", restFormat: "body" }) options?: SaveOptions
   ): Promise<T[]> {
     const entities: T[] = [];
     for (const id of entityIds) {
@@ -140,15 +164,15 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
       if (!entity) {
         throw new NotFoundError(`Entity with id ${id} not found`);
       }
-      entities.push(entity);
+      entities.push(entity as T);
     }
-    return super.softRemove(entities, options);
+    return super.softRemove(entities, options) as Promise<T[]>;
   }
 
   @Action({ restVerb: "POST" })
   static insert<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" })
+    @Param({ name: "entity", restFormat: "body" })
     entity: QueryDeepPartialEntity<T> | QueryDeepPartialEntity<T>[]
   ): Promise<InsertResult> {
     return super.insert(entity);
@@ -157,8 +181,10 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "PATCH" })
   static async update<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) criteria: FindOptionsWhere<T>,
-    @Param({ restFormat: "body" }) partialEntity: QueryDeepPartialEntity<T>
+    @Param({ name: "criteria", restFormat: "body" })
+    criteria: FindOptionsWhere<T>,
+    @Param({ name: "partialEntity", restFormat: "body" })
+    partialEntity: QueryDeepPartialEntity<T>
   ): Promise<UpdateResult> {
     return super.update(criteria, partialEntity);
   }
@@ -166,8 +192,10 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "PATCH" })
   static async updateById<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) id: string | number | Date | ObjectId,
-    @Param({ restFormat: "body" }) partialEntity: QueryDeepPartialEntity<T>
+    @Param({ name: "id", restFormat: "path" })
+    id: string | number | Date | ObjectId,
+    @Param({ name: "partialEntity", restFormat: "body" })
+    partialEntity: QueryDeepPartialEntity<T>
   ): Promise<UpdateResult> {
     const entity = await this.findOneById(id);
     if (!entity) {
@@ -179,8 +207,10 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "PATCH" })
   static async updateMultiple<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) criteria: FindOptionsWhere<T>[],
-    @Param({ restFormat: "body" }) partialEntities: QueryDeepPartialEntity<T>[]
+    @Param({ name: "criteria", restFormat: "body" })
+    criteria: FindOptionsWhere<T>[],
+    @Param({ name: "partialEntities", restFormat: "body" })
+    partialEntities: QueryDeepPartialEntity<T>[]
   ): Promise<UpdateResult[]> {
     const results: UpdateResult[] = [];
     for (let i = 0; i < criteria.length; i++) {
@@ -192,7 +222,7 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "DELETE" })
   static async delete<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" })
+    @Param({ name: "criteria", restFormat: "body" })
     criteria: string | number | Date | ObjectId | FindOptionsWhere<T>
   ): Promise<DeleteResult> {
     return super.delete(criteria);
@@ -201,7 +231,7 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "DELETE" })
   static async deleteMultiple<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" })
+    @Param({ name: "criteria", restFormat: "body" })
     criteria: (string | number | Date | ObjectId | FindOptionsWhere<T>)[]
   ): Promise<DeleteResult[]> {
     const results: DeleteResult[] = [];
@@ -214,7 +244,8 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "DELETE" })
   static async deleteById<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) id: string | number | Date | ObjectId
+    @Param({ name: "id", restFormat: "path" })
+    id: string | number | Date | ObjectId
   ): Promise<DeleteResult> {
     const entity = await this.findOneById(id);
     if (!entity) {
@@ -226,7 +257,8 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "DELETE" })
   static async deleteByIds<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) ids: (string | number | Date | ObjectId)[]
+    @Param({ name: "ids", restFormat: "body" })
+    ids: (string | number | Date | ObjectId)[]
   ): Promise<DeleteResult[]> {
     const results: DeleteResult[] = [];
     for (const id of ids) {
@@ -242,9 +274,9 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "POST" })
   static upsert<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" })
+    @Param({ name: "entityOrEntities", restFormat: "body" })
     entityOrEntities: QueryDeepPartialEntity<T> | QueryDeepPartialEntity<T>[],
-    @Param({ restFormat: "body" })
+    @Param({ name: "conflictPathsOrOptions", restFormat: "body" })
     conflictPathsOrOptions: string[] | UpsertOptions<T>
   ): Promise<InsertResult> {
     return super.upsert(entityOrEntities, conflictPathsOrOptions);
@@ -253,15 +285,16 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "GET" })
   static exists<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) options?: FindManyOptions<T>
+    @Param({ name: "options", restFormat: "query" })
+    options?: FindManyOptions<T>
   ): Promise<boolean> {
-    return super.exists(options);
+    return super.exists(options as FindManyOptions<BaseEntity>);
   }
 
   @Action({ restVerb: "GET" })
   static existsBy<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<boolean> {
     return super.existsBy(where);
   }
@@ -269,15 +302,16 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "GET" })
   static count<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) options?: FindManyOptions<T>
+    @Param({ name: "options", restFormat: "query" })
+    options?: FindManyOptions<T>
   ): Promise<number> {
-    return super.count(options);
+    return super.count(options as FindManyOptions<BaseEntity>);
   }
 
   @Action({ restVerb: "GET" })
   static countBy<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<number> {
     return super.countBy(where);
   }
@@ -285,86 +319,97 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "GET" })
   static sum<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) columnName: PickKeysByType<T, number>,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "columnName", restFormat: "path" })
+    columnName: PickKeysByType<T, number>,
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<number | null> {
-    return super.sum(columnName, where);
+    return super.sum(columnName as never, where);
   }
 
   @Action({ restVerb: "GET" })
   static average<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) columnName: PickKeysByType<T, number>,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "columnName", restFormat: "path" })
+    columnName: PickKeysByType<T, number>,
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<number | null> {
-    return super.average(columnName, where);
+    return super.average(columnName as never, where);
   }
 
   @Action({ restVerb: "GET" })
   static minimum<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) columnName: PickKeysByType<T, number>,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "columnName", restFormat: "path" })
+    columnName: PickKeysByType<T, number>,
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<number | null> {
-    return super.minimum(columnName, where);
+    return super.minimum(columnName as never, where);
   }
 
   @Action({ restVerb: "GET" })
   static maximum<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) columnName: PickKeysByType<T, number>,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "columnName", restFormat: "path" })
+    columnName: PickKeysByType<T, number>,
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<number | null> {
-    return super.maximum(columnName, where);
+    return super.maximum(columnName as never, where);
   }
 
   @Action({ restVerb: "GET" })
   static find<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) options?: FindManyOptions<T>
+    @Param({ name: "options", restFormat: "query" })
+    options?: FindManyOptions<T>
   ): Promise<T[]> {
-    return super.find(options as FindManyOptions<BaseEntity>);
+    return super.find(options as FindManyOptions<BaseEntity>) as Promise<T[]>;
   }
 
   @Action({ restVerb: "GET" })
   static findBy<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<T[]> {
-    return super.findBy(where);
+    return super.findBy(where) as Promise<T[]>;
   }
 
   @Action({ restVerb: "GET" })
   static findAndCount<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) options?: FindManyOptions<T>
+    @Param({ name: "options", restFormat: "query" })
+    options?: FindManyOptions<T>
   ): Promise<[T[], number]> {
-    return super.findAndCount(options);
+    return super.findAndCount(
+      options as FindManyOptions<BaseEntity>
+    ) as Promise<[T[], number]>;
   }
 
   @Action({ restVerb: "GET" })
   static findAndCountBy<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<[T[], number]> {
-    return super.findAndCountBy(where);
+    return super.findAndCountBy(where) as Promise<[T[], number]>;
   }
 
   @Action({ restVerb: "GET" })
   static findByIds<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) ids: any[]
+    @Param({ name: "ids", restFormat: "query" }) ids: any[]
   ): Promise<T[]> {
-    return super.findByIds(ids);
+    return super.findByIds(ids) as Promise<T[]>;
   }
 
   @Action({ restVerb: "GET" })
   static async findOne<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) options: FindOneOptions<T>
+    @Param({ name: "options", restFormat: "query" })
+    options: FindOneOptions<T>
   ): Promise<T | null> {
     try {
-      return await super.findOne(options);
+      return (await super.findOne(
+        options as FindOneOptions<BaseEntity>
+      )) as T | null;
     } catch (error) {
       throw new NotFoundError("Entity not found");
     }
@@ -372,10 +417,10 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "GET" })
   static async findOneBy<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<T | null> {
     try {
-      return await super.findOneBy(where);
+      return (await super.findOneBy(where)) as T | null;
     } catch (error) {
       throw new NotFoundError("Entity not found");
     }
@@ -384,10 +429,11 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "GET" })
   static async findOneById<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "path" }) id: string | number | Date | ObjectId
+    @Param({ name: "id", restFormat: "path" })
+    id: string | number | Date | ObjectId
   ): Promise<T | null> {
     try {
-      return await super.findOneById(id);
+      return (await super.findOneById(id)) as T | null;
     } catch (error) {
       throw new NotFoundError("Entity not found");
     }
@@ -396,10 +442,13 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "GET" })
   static async findOneOrFail<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) options: FindOneOptions<T>
+    @Param({ name: "options", restFormat: "query" })
+    options: FindOneOptions<T>
   ): Promise<T> {
     try {
-      return await super.findOneOrFail(options);
+      return (await super.findOneOrFail(
+        options as FindOneOptions<BaseEntity>
+      )) as T;
     } catch (error) {
       throw new NotFoundError("Entity not found");
     }
@@ -408,10 +457,10 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "GET" })
   static async findOneByOrFail<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "query" }) where: FindOptionsWhere<T>
+    @Param({ name: "where", restFormat: "query" }) where: FindOptionsWhere<T>
   ): Promise<T> {
     try {
-      return await super.findOneByOrFail(where);
+      return (await super.findOneByOrFail(where)) as T;
     } catch (error) {
       throw new NotFoundError("Entity not found");
     }
@@ -420,8 +469,8 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   @Action({ restVerb: "POST" })
   static query<T extends BaseEntity>(
     this: { new (): T } & typeof BaseEntity,
-    @Param({ restFormat: "body" }) query: string,
-    @Param({ restFormat: "body" }) parameters?: any[]
+    @Param({ name: "query", restFormat: "body" }) query: string,
+    @Param({ name: "parameters", restFormat: "body" }) parameters?: any[]
   ): Promise<any> {
     return super.query(query, parameters);
   }
@@ -432,4 +481,155 @@ export class Model<T extends BaseEntity = BaseEntity> extends BaseEntity {
   ): Promise<void> {
     return super.clear();
   }
+}
+
+const FIELD_DECORATOR_KEY = "custom:tensaco-type-server";
+type FieldProps = {
+  typeormProps: object;
+  typeGQLProps: object;
+  tsoaProps: object;
+};
+export function Field(): PropertyDecorator {
+  return (target: any, propertyKey: string | symbol) => {
+    Reflect.defineMetadata(FIELD_DECORATOR_KEY, target, propertyKey);
+  };
+}
+
+export function PrepareModel(): ClassDecorator {
+  function decorator<T extends typeof Model>(target: T) {
+    Object.getOwnPropertyNames(target.prototype).forEach((methodName) => {
+      const property = (target.prototype as any)[methodName];
+      if (typeof property === "function") {
+        let staticMethodName = methodName;
+        const actionMetadata: ActionProps = Reflect.getMetadata(
+          ACTION_PARAM_DECORATOR_KEY,
+          target.prototype,
+          methodName
+        );
+        if (!actionMetadata) {
+          return;
+        }
+
+        console.log(`Method: ${methodName}`);
+        if (isInstanceMethod(target, methodName)) {
+          // for each `InstanceMethod`-annotated method,
+          // make a static equivalent
+          staticMethodName = actionMetadata.staticName!;
+          (target as any)[staticMethodName] = async (
+            id: number,
+            ...args: any[]
+          ) => {
+            const instance = await target.findOne.call(target, {
+              where: { id: id } as FindOptionsWhere<BaseEntity>,
+            });
+            if (!instance) {
+              throw new Error("Instance not found");
+            }
+            return property.apply(instance, args);
+          };
+        }
+        let staticMethod = (target as any)[staticMethodName];
+        if (actionMetadata.autogenTypeGQL) {
+          // TODO: add typeGQL param decorators
+          // TODO: add typeGQL context parameter
+
+          switch (actionMetadata.gqlMethod) {
+            case "query":
+              staticMethod = typeGQL.Query(actionMetadata.typeGQLQueryOptions)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            case "mutation":
+              staticMethod = typeGQL.Mutation(
+                actionMetadata.typeGQLMutationOptions
+              )(target, staticMethodName, staticMethod);
+              break;
+            case "subscription":
+              staticMethod = typeGQL.Subscription(
+                actionMetadata.typeGQLSubscriptionOptions
+              )(target, staticMethodName, staticMethod);
+              break;
+            default:
+              throw new Error(
+                `Unsupported GQL method: ${actionMetadata.gqlMethod}`
+              );
+          }
+        }
+        if (actionMetadata.autogenTypeRest) {
+          // TODO: add tsoa param decorators
+          // TODO: add tsoa context parameter
+
+          // FIXME: implement websocket streaming for http also
+          switch (actionMetadata.restVerb) {
+            case "GET":
+              staticMethod = tsoa.Get(actionMetadata.path)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            case "POST":
+              staticMethod = tsoa.Post(actionMetadata.path)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            case "PUT":
+              staticMethod = tsoa.Put(actionMetadata.path)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            case "DELETE":
+              staticMethod = tsoa.Delete(actionMetadata.path)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            case "PATCH":
+              staticMethod = tsoa.Patch(actionMetadata.path)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            case "OPTIONS":
+              staticMethod = tsoa.Options(actionMetadata.path)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            case "HEAD":
+              staticMethod = tsoa.Head(actionMetadata.path)(
+                target,
+                staticMethodName,
+                staticMethod
+              );
+              break;
+            default:
+              throw new Error(
+                `Unsupported HTTP method: ${actionMetadata.restVerb}`
+              );
+          }
+          (target as any)[staticMethodName] = staticMethod;
+        }
+      } else {
+        // check if it has a @Field decorator
+        const fieldMetadata = Reflect.getMetadata(
+          FIELD_DECORATOR_KEY,
+          target.prototype,
+          methodName
+        );
+      }
+      return;
+    });
+    return target;
+  }
+  return decorator as ClassDecorator;
 }

@@ -69,11 +69,7 @@ export function DropMethod(condition: boolean): MethodDecorator {
 }
 
 export function DefineMetadata(key: string, value: any) {
-  return function (
-    target: any,
-    propertyKey: string,
-    descriptor: PropertyDescriptor
-  ) {
+  return function (target: any) {
     Reflect.defineMetadata(key, value, target);
   };
 }
