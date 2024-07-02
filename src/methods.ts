@@ -172,13 +172,13 @@ export function StaticTypeGQLAction(
     }
   };
 }
-export function InstanceTypeRESTAction<T>(
+export function InstanceTypeRESTAction<TEntity extends BaseEntity>(
   props: typeRESTActionInputProps & {
-    findById: (id: number) => Promise<T>;
+    findById: (id: number) => Promise<TEntity>;
   }
-): MethodDecorator {
+) {
   return function <
-    TInstanceMethod extends (...args: TInstanceMethodArgs) => Promise<T>,
+    TInstanceMethod extends (...args: TInstanceMethodArgs) => Promise<any>,
     TInstanceMethodArgs extends any[]
   >(
     target: Object,
@@ -191,6 +191,7 @@ export function InstanceTypeRESTAction<T>(
 
     const staticMethod = async (id: number, ...args: TInstanceMethodArgs) => {
       const instance = props.findById(id);
+      if (!instance) throw new Error("Instance not found");
       return instanceMethod.apply(instance, args);
     };
 
@@ -212,25 +213,26 @@ export function InstanceTypeRESTAction<T>(
   };
 }
 
-export function InstanceTypeGQLAction<T>(
+export function InstanceTypeGQLAction<TEntity extends BaseEntity>(
   props: typeGQLActionInputProps & {
-    findById: (id: number) => Promise<T>;
+    findById: (id: number) => Promise<TEntity>;
   }
-): MethodDecorator {
+) {
   return function <
-    TInstanceMethod extends (...args: TInstanceMethodArgs) => Promise<T>,
+    TInstanceMethod extends (...args: TInstanceMethodArgs) => Promise<any>,
     TInstanceMethodArgs extends any[]
   >(
     target: Object,
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<TInstanceMethod>
-  ) {
+  ): TypedPropertyDescriptor<TInstanceMethod> | void {
     target = target as ClassType<any>;
     const instanceMethod: TInstanceMethod | undefined = descriptor.value;
     if (!instanceMethod) throw new Error("Instance method is undefined");
 
     const staticMethod = async (id: number, ...args: TInstanceMethodArgs) => {
       const instance = props.findById(id);
+      if (!instance) throw new Error("Instance not found");
       return instanceMethod.apply(instance, args);
     };
 
@@ -289,8 +291,8 @@ export function Action(props: ActionInputProps): MethodDecorator {
         ...props,
         findById: (id: number) => {
           return (target as typeof BaseEntity).findBy({
-            id,
-          } as FindOptionsWhere<typeof target>);
+            id: id,
+          } as FindOptionsWhere<any>);
         },
       };
       if (props.autogenTypeGQL) {
