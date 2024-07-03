@@ -1,5 +1,6 @@
 import { PubSub } from "graphql-subscriptions"; // Import PubSub type
 import { typeREST } from "@tensaco/type-server/deps";
+import express from "express";
 
 export default class ServiceContext extends typeREST.ServiceContext {
   user?: any;

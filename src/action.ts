@@ -2,12 +2,25 @@ import { typeGQL, typeREST } from "@tensaco/type-server/deps";
 import type { Model } from "@tensaco/type-server/model";
 import type { StaticMethod } from "@tensaco/type-server/utils/types";
 import {
+  isEnum,
   isInstanceMethod,
   isStaticMethod,
 } from "@tensaco/type-server/utils/typescript";
 import assert from "assert";
+import {
+  GraphQLInt,
+  GraphQLFloat,
+  GraphQLString,
+  GraphQLBoolean,
+  GraphQLEnumType,
+  GraphQLInputObjectType,
+  type GraphQLCompositeType,
+} from "graphql/type";
 import { Arg, type ClassType, type SubscriptionOptions } from "type-graphql";
 import type { BaseEntity, FindOptionsWhere } from "typeorm";
+import { GraphQLUpload, FileUpload } from "graphql-upload";
+import { createParameterDecorator } from "type-graphql";
+import type ServiceContext from "@tensaco/type-server/context";
 
 type typeRESTActionInputProps = {
   path?: string | undefined;
@@ -73,7 +86,9 @@ export function StaticTypeRESTAction(
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<T>
   ) {
-    target = target as ClassType<any>;
+    if (props.path) {
+      typeREST.Path(props.path)(target, propertyKey, 0);
+    }
     switch (props.restVerb) {
       case "GET":
         typeREST.GET(target, propertyKey as string);
@@ -123,9 +138,6 @@ export function StaticTypeRESTAction(
       default:
         throw new Error(`Invalid restVerb: ${props.restVerb}`);
     }
-    if (props.path) {
-      typeREST.Path(props.path)(target, propertyKey, 0);
-    }
   };
 }
 
@@ -137,7 +149,6 @@ export function StaticTypeGQLAction(
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<T>
   ) {
-    target = target as ClassType<any>;
     const returnType = Reflect.getMetadata(
       "design:returntype",
       target,
@@ -172,37 +183,58 @@ export function StaticTypeGQLAction(
     }
   };
 }
-export function InstanceTypeRESTAction<TEntity extends BaseEntity>(
-  props: typeRESTActionInputProps & {
-    findById: (id: number) => Promise<TEntity>;
+
+// Helper function to handle common logic
+function createStaticMethod<
+  TEntity extends BaseEntity,
+  TInstanceMethod extends (...args: any[]) => Promise<any>
+>(
+  target: Object,
+  propertyKey: string | symbol,
+  descriptor: TypedPropertyDescriptor<TInstanceMethod>,
+  props: { staticName?: string }
+): { staticMethod: Function; staticName: string } {
+  target = target as typeof BaseEntity;
+  const instanceMethod: TInstanceMethod | undefined = descriptor.value;
+  if (!instanceMethod) throw new Error("Instance method is undefined");
+
+  const staticMethod = async (
+    id: number,
+    ...args: Parameters<TInstanceMethod>
+  ) => {
+    const instance = await (target as typeof BaseEntity).findBy({
+      id,
+    } as FindOptionsWhere<unknown> as FindOptionsWhere<Model>);
+    if (!instance) throw new Error("Instance not found");
+    return instanceMethod.apply(instance, args);
+  };
+
+  const staticName = props.staticName || (propertyKey as string);
+  (target as any)[staticName] = staticMethod;
+
+  const methodMetadataKeys = Reflect.getMetadataKeys(instanceMethod);
+  for (const key of methodMetadataKeys) {
+    const metadataValue = Reflect.getMetadata(key, instanceMethod);
+    Reflect.defineMetadata(key, metadataValue, staticMethod);
   }
-) {
-  return function <
-    TInstanceMethod extends (...args: TInstanceMethodArgs) => Promise<any>,
-    TInstanceMethodArgs extends any[]
-  >(
+
+  return { staticMethod, staticName };
+}
+
+export function InstanceTypeRESTAction(
+  props: typeRESTActionInputProps
+): MethodDecorator {
+  return function <TInstanceMethod extends (...args: any[]) => Promise<any>>(
     target: Object,
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<TInstanceMethod>
   ) {
-    target = target as ClassType<any>;
-    const instanceMethod: TInstanceMethod | undefined = descriptor.value;
-    if (!instanceMethod) throw new Error("Instance method is undefined");
-
-    const staticMethod = async (id: number, ...args: TInstanceMethodArgs) => {
-      const instance = props.findById(id);
-      if (!instance) throw new Error("Instance not found");
-      return instanceMethod.apply(instance, args);
-    };
-
-    const staticName = props.staticName || (propertyKey as string);
-    (target as any)[staticName] = staticMethod;
-
-    const methodMetadataKeys = Reflect.getMetadataKeys(instanceMethod);
-    for (const key of methodMetadataKeys) {
-      const metadataValue = Reflect.getMetadata(key, instanceMethod);
-      Reflect.defineMetadata(key, metadataValue, staticMethod);
-    }
+    const { staticName } = createStaticMethod(
+      target,
+      propertyKey,
+      descriptor,
+      props
+    );
 
     StaticTypeRESTAction({
       ...props,
@@ -210,48 +242,31 @@ export function InstanceTypeRESTAction<TEntity extends BaseEntity>(
     })(target, staticName, descriptor);
 
     return descriptor;
-  };
+  } as MethodDecorator;
 }
 
-export function InstanceTypeGQLAction<TEntity extends BaseEntity>(
-  props: typeGQLActionInputProps & {
-    findById: (id: number) => Promise<TEntity>;
-  }
-) {
-  return function <
-    TInstanceMethod extends (...args: TInstanceMethodArgs) => Promise<any>,
-    TInstanceMethodArgs extends any[]
-  >(
+export function InstanceTypeGQLAction(
+  props: typeGQLActionInputProps
+): MethodDecorator {
+  return function <TInstanceMethod extends (...args: any[]) => Promise<any>>(
     target: Object,
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<TInstanceMethod>
-  ): TypedPropertyDescriptor<TInstanceMethod> | void {
-    target = target as ClassType<any>;
-    const instanceMethod: TInstanceMethod | undefined = descriptor.value;
-    if (!instanceMethod) throw new Error("Instance method is undefined");
-
-    const staticMethod = async (id: number, ...args: TInstanceMethodArgs) => {
-      const instance = props.findById(id);
-      if (!instance) throw new Error("Instance not found");
-      return instanceMethod.apply(instance, args);
-    };
-
-    const staticName = props.staticName || (propertyKey as string);
-    (target as any)[staticName] = staticMethod;
-
-    const methodMetadataKeys = Reflect.getMetadataKeys(instanceMethod);
-    for (const key of methodMetadataKeys) {
-      const metadataValue = Reflect.getMetadata(key, instanceMethod);
-      Reflect.defineMetadata(key, metadataValue, staticMethod);
-    }
+  ) {
+    const { staticName } = createStaticMethod(
+      target,
+      propertyKey,
+      descriptor,
+      props
+    );
 
     StaticTypeGQLAction({
       ...props,
-      staticName: staticName,
+      staticName,
     })(target, staticName, descriptor);
 
     return descriptor;
-  };
+  } as MethodDecorator;
 }
 
 export function Action(props: ActionInputProps): MethodDecorator {
@@ -287,19 +302,11 @@ export function Action(props: ActionInputProps): MethodDecorator {
     );
 
     if (isInstanceMethod(target, propertyKey as string)) {
-      const instanceProps = {
-        ...props,
-        findById: (id: number) => {
-          return (target as typeof BaseEntity).findBy({
-            id: id,
-          } as FindOptionsWhere<any>);
-        },
-      };
       if (props.autogenTypeGQL) {
-        InstanceTypeGQLAction(instanceProps)(target, propertyKey, descriptor);
+        InstanceTypeGQLAction(props)(target, propertyKey, descriptor);
       }
       if (props.autogenTypeRest) {
-        InstanceTypeRESTAction(instanceProps)(target, propertyKey, descriptor);
+        InstanceTypeRESTAction(props)(target, propertyKey, descriptor);
       }
     } else if (
       isStaticMethod(target as ClassType<any>, propertyKey as string)
@@ -315,90 +322,5 @@ export function Action(props: ActionInputProps): MethodDecorator {
     }
 
     return descriptor;
-  };
-}
-
-export type ParamOptions = {
-  restFormat?: "body" | "query" | "path";
-  name: string;
-  required?: boolean;
-};
-
-const REQUEST_PARAM_DECORATOR_KEY = "custom:tensaco-type-server-request-param";
-
-export function Request() {
-  return (
-    target: Object,
-    propertyKey: string | symbol | undefined,
-    parameterIndex: number
-  ) => {
-    if (!propertyKey) throw new Error("Property key is required.");
-
-    Reflect.defineMetadata(
-      REQUEST_PARAM_DECORATOR_KEY,
-      parameterIndex,
-      target,
-      propertyKey
-    );
-  };
-}
-
-export function Param(options: ParamOptions): ParameterDecorator {
-  return (
-    target: Object,
-    propertyKey: string | symbol | undefined, // Allow undefined
-    parameterIndex: number
-  ) => {
-    const { restFormat: restFormat = "body", name, required = true } = options;
-
-    if (!propertyKey) {
-      throw new Error(
-        "Property key is required. How did you even get this far? This is a bug."
-      );
-    }
-
-    // Apply tsoa decorator
-    switch (restFormat) {
-      case "body":
-        typeREST.BodyProp(name)(target, propertyKey, parameterIndex);
-        break;
-      case "query":
-        typeREST.Query(name)(target, propertyKey, parameterIndex);
-        break;
-      case "path":
-        typeREST.Path(name)(target, propertyKey, parameterIndex);
-        break;
-      default:
-        throw new Error(`Invalid restFormat: ${restFormat}`);
-    }
-
-    // Apply type-graphql decorator
-    Arg(name, { nullable: !required })(target, propertyKey, parameterIndex);
-  };
-}
-
-export const CONTEXT_PARAM_DECORATOR_KEY =
-  "custom:tensaco-type-server-context-param";
-
-export function Context() {
-  return (
-    target: Object,
-    propertyKey: string | symbol | undefined,
-    parameterIndex: number
-  ) => {
-    if (!propertyKey) {
-      throw new Error(
-        "Property key is required. How did you even get this far? This is a bug."
-      );
-    }
-    typeGQL.Ctx(propertyKey as string)(target, propertyKey, parameterIndex);
-    typeREST.Context(target, propertyKey, parameterIndex);
-
-    Reflect.defineMetadata(
-      CONTEXT_PARAM_DECORATOR_KEY,
-      parameterIndex,
-      target,
-      propertyKey
-    );
   };
 }
